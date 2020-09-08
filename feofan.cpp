@@ -50,20 +50,20 @@
 
 #define NN_TAG "NN: "
 
-/// --- Вспомагательные платформазависимые функции
+/// --- Platform dependent functions
 
 /**
- * Функция динамической загрузки библиотеки
- * @param path Путь до библиотеки.
- * @return указатель на область памяти.
+ * Dynamic library loading function.
+ * @param path Library path.
+ * @return pointer to loaded lib.
  */
 HINSTANCE loadLib(string path);
 
 /**
- * Функция загрузки символа из библиотеки.
- * @param HINSTANCE Динамическая библиотека.
- * @param symbol Имя функции.
- * @return указатель на функцию.
+ * The function of loading a symbol from the library.
+ * @param lib - library pointer.
+ * @param symbol - function name.
+ * @return pointer to function.
  */
 void* loadSymbol(HINSTANCE lib, const char* symbol);
 
@@ -79,7 +79,6 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     dlaCoresCount = 0;
     loaded = false;
     networksCount = 0;
-    networkDefinitions = (NetworkDefinition*)malloc(sizeof(NetworkDefinition));
     neuralResult = nullptr;
     readyCallback = nullptr;
 
@@ -91,6 +90,7 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     if(neuralInfoCallback) {
         neuralInfo = move(neuralInfoCallback);
     }
+#ifdef DYNAMIC_LINKING
     /// Загрузка вспомогательной библиотеки для разбора результатов сетей
     neuralAdapter = loadLib(libname.data());
     if(!neuralAdapter) {
@@ -139,6 +139,8 @@ Feofan::Feofan(function<void(string, int)> logCallback,
             }
         }
     }
+#endif // DYNAMIC_LINKING
+
     /// Получение информации о доступных форматах точности устройства
     std::string _fastestPrecision;
     auto _builder = nvinfer1::createInferBuilder(cuLogger);
@@ -223,15 +225,17 @@ std::string Feofan::networkName() const {
 }
 
 bool Feofan::neuralInit(std::string networkPath, const std::string& caffeProtoTxtPath) {
-
+    
+    /// TODO: add loaded network to the vector of network definitions
+    
     ICudaEngine *_cudaEngine;
     string _enginePath;
     char *_engineStream;
     FILE *_cacheFile;
     size_t  _engineSize;
 
-    if (log) log(NN_TAG "Загрузка нейронной сети.", 0);
-    if (log) log(NN_TAG "Путь: " + networkPath, 0);
+    if (log) log(NN_TAG "Loading network...", 0);
+    if (log) log(NN_TAG "Path: " + networkPath, 0);
 
     /// Проверка типа файла. Если ".engine" - загрузка, иначе - парсинг и оптимизация.
     if(networkPath.compare(networkPath.length() - 7, 7, ".engine") != 0) {
@@ -241,11 +245,11 @@ bool Feofan::neuralInit(std::string networkPath, const std::string& caffeProtoTx
     }
 
     if(_enginePath.empty()) {
-        if (log) log("Ошибка загрузки нейронной сети: \"enginePath is empty\".", 2);
+        if (log) log("Error loading network: \"enginePath is empty\".", 2);
         return false;
     }
 
-    IRuntime *_runtime = nvinfer1::createInferRuntime(cuLogger);
+    IRuntime *_runtime = createInferRuntime(cuLogger);
 
     if (!_runtime) {
         return false;
@@ -300,17 +304,17 @@ bool Feofan::neuralInit(std::string networkPath, const std::string& caffeProtoTx
         if(_cudaEngine->bindingIsInput(_layerInfo.binding)) {
             inputs.emplace_back(_layerInfo);
 
-            log(NN_TAG"Найден входной слой: " + _layerInfo.name, 0);
+            log(NN_TAG"Input layer: " + _layerInfo.name, 0);
         } else {
             outputs.emplace_back(_layerInfo);
-            log(NN_TAG"Найден выходной слой: " + _layerInfo.name, 0);
+            log(NN_TAG"Output layer: " + _layerInfo.name, 0);
         }
     }
 
     const size_t _bindingsSize = sizeof(void*) * _cudaEngine->getNbBindings();
     bindings = (void**)malloc(_bindingsSize);
     if(!bindings) {
-        log(NN_TAG"Ошибка выделения памяти под связи. Размер: " + std::to_string(_bindingsSize) + ".",2);
+        log(NN_TAG"Memory allocation error for the bindings. Size: " + std::to_string(_bindingsSize) + ".",2);
         return false;
     }
     memset(bindings, 0, _bindingsSize);
@@ -323,12 +327,14 @@ bool Feofan::neuralInit(std::string networkPath, const std::string& caffeProtoTx
         _n ++;
     }
 
-    char _memStr[20] = {0};
-    std::sprintf(_memStr, "%.2f", _cudaEngine->getDeviceMemorySize() * 1.0 / std::pow(1024,2));
-    log(NN_TAG + std::string("Загружена нейронная сеть: ") + std::string(_cudaEngine->getName()), 0);
-    log(NN_TAG + std::string("Количество слоёв: ") + std::to_string(_cudaEngine->getNbLayers()), 0);
-    log(NN_TAG + std::string("Количество точек связи: ") + std::to_string(_cudaEngine->getNbBindings()), 0);
-    log(NN_TAG + std::string("Занято памяти GPU: ") + _memStr + std::string (" МБ"), 0);
+    if (log) {
+        char _memStr[20] = { 0 };
+        std::sprintf(_memStr, "%.2f", _cudaEngine->getDeviceMemorySize() * 1.0 / std::pow(1024, 2));
+        log(NN_TAG + std::string("Neural network loaded: ") + std::string(_cudaEngine->getName()), 0);
+        log(NN_TAG + std::string("Number of layers: ") + std::to_string(_cudaEngine->getNbLayers()), 0);
+        log(NN_TAG + std::string("Number of bindings: ") + std::to_string(_cudaEngine->getNbBindings()), 0);
+        log(NN_TAG + std::string("Memory used: ") + _memStr + std::string(" MB"), 0);
+    }
 
     if(readyCallback) {
         readyCallback();
@@ -431,7 +437,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         _isEngine = true;
         _enginePath = modelPath;
     }
-        /// Неизвестный
+        /// Underfined
     else {
         log(NN_TAG"Неподдерживаемый тип модели. Поддерживаемые типы файлов:"
             "<br>&nbsp;&nbsp;&nbsp;&nbsp;caffe</br>"
@@ -576,6 +582,17 @@ void Feofan::setCurrentNetworkAdapter(std::string networkAdapter) {
     setParam(currentNetworkAdapter + ".InputSize", std::to_string(getLayerWidth(inputs[0].dims, currentNetworkAdapter)));
 }
 
+#ifndef DYNAMIC_LINKING
+
+void Feofan::setGetLayerHeightCallback(function<size_t(nvinfer1::Dims dims, std::string networkType)> callback) {
+    getLayerHeight = callback;
+}
+
+void Feofan::setGetLayerWidthCallback(function<size_t(nvinfer1::Dims dims, std::string networkType)> callback) {
+    getLayerWidth = callback;
+}
+#endif // DYNAMIC_LINKING
+
 void Feofan::setNetworkReadyCallback(std::function<void()> callback) {
     readyCallback = std::move(callback);
 }
@@ -590,6 +607,13 @@ inline nvinfer1::Dims Feofan::validateDims( const nvinfer1::Dims& dims ) {
     }
     return _outDims;
 }
+
+#ifndef DYNAMIC_LINKING
+
+void Feofan::setSetParamCallback(function<void(std::string paramName, std::string value)> callback) {
+    setParam = callback;
+}
+#endif
 
 Feofan::~Feofan() {
 

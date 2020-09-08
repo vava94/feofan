@@ -1,12 +1,17 @@
 /**
- * Created by vitaliy.kiselyov on 28.07.2020.
+ * Created by vava94 on 28.07.2020.
  * 
- * Класс фрэймворка нейронных сетей, основанный на библиотеке TensorRT.
- * Поддерживается загрузка нейронных сетей в формате ".onnx", ".uff" и CUDA engine файлов.
+ * A neural network framework class based on the TensorRT library.
  * 
- * Для работы фрэймворка также необходима библиотека "neural-adapter": 
+ * Supported file formats: ".onnx", ".uff" & CUDA engine (TRT native files).
+ * Supported UNIX & Windows compilers.
+ * 
+ * For dynamic linking example requires "neural-adapter" library: 
  *      https://github.com/vava94/neural-adapter
- * Neural-adapter обеспечивает разбор выходных данных нейронной сети и перевод их в удобный для отображения формат.
+ * Neural-adapter provides parsing of neural network output data and translating them into
+ * a format convenient for display.
+ * 
+ * Please rerfer to https://github.com/vava94/feofan if using.
  * 
  */
 
@@ -25,10 +30,6 @@
 #ifdef _WIN32
 #include "Windows.h"
 #endif
-
-
- /// Внешняя функция из main
- void log(const std::string&, unsigned char level);
 
 using namespace std;
 using namespace nvinfer1;
@@ -97,7 +98,7 @@ private:
 
     struct NetworkDefinition {
         int pos;
-        string filePath;
+        string filePath, enginePath;
         string name;
         DeviceType deviceType;
         IExecutionContext *executionContext{nullptr};
@@ -142,21 +143,29 @@ private:
     IExecutionContext *executionContext{nullptr};
     int dlaCoresCount, networksCount;
     map<int, NeuralImage*> neuralImages;
-    NetworkDefinition *networkDefinitions;
     string infoString, currentNetworkAdapter;
     vector<layerInfo> inputs, outputs;
+    vector<NetworkDefinition> networkDefinitions;
     vector<PrecisionType> availablePrecisions;
     vector<string> availableAdapters;
     void **bindings;
     HINSTANCE neuralAdapter;
 
+#ifdef  DYNAMIC_LINKING
     /// Функции библиотеки neuraladapter
-    size_t (WINCALL *getLayerHeight)(nvinfer1::Dims dims, std::string networkType) = nullptr;
-    size_t (WINCALL *getLayerWidth)(nvinfer1::Dims dims, std::string networkType) = nullptr;
-    int (WINCALL *parseDetectionOutput)(void **output, float **parsed, const std::string& networkType) = nullptr;
-    void (WINCALL *setParam)(std::string paramName, std::string value) = nullptr;
+    size_t(WINCALL* getLayerHeight)(nvinfer1::Dims dims, std::string networkType) = nullptr;
+    size_t(WINCALL* getLayerWidth)(nvinfer1::Dims dims, std::string networkType) = nullptr;
+    int (WINCALL* parseDetectionOutput)(void** output, float** parsed, const std::string& networkType) = nullptr;
+    void (WINCALL* setParam)(std::string paramName, std::string value) = nullptr;
+#else
+    function<size_t(nvinfer1::Dims dims, std::string networkType)> getLayerHeight, getLayerWidth;
+    function<int(void** output, float** parsed, const std::string& networkType)> parseDetectionOutput;
+    function<void(std::string paramName, std::string value)> setParam;
+#endif //  DYNAMIC_LINKING
 
-    static inline nvinfer1::Dims validateDims( const nvinfer1::Dims& dims );
+
+
+    static inline Dims validateDims( const Dims& dims );
 
 public:
 
@@ -186,6 +195,28 @@ public:
     void selectBinding(std::string name, bool isInput);
     void setCurrentNetworkAdapter(std::string networkAdapter);
     void setNetworkReadyCallback(std::function<void()> callback);
+
+#ifndef DYNAMIC_LINKING
+    /**
+    * Set a callback for a function that returns the height of the input layer.
+    * 
+    * @param callback - callback. Callback function requires layer dims and network name.
+    */
+    void setGetLayerHeightCallback(function<size_t(Dims dims, string networkType)> callback);
+    /**
+    * Set a callback for a function that returns the width of the input layer.
+    *
+    * @param callback - callback. Callback function requires layer dims and network name.
+    */
+    void setGetLayerWidthCallback(function<size_t(nvinfer1::Dims dims, std::string networkType)> callback);
+    /**
+    * Set a callback for a function that sets parameters to the neural network output parser.
+    *
+    * @param callback - callback. Callback function requires param name and value.
+    */
+    void setSetParamCallback(function<void(std::string paramName, std::string value)>);
+#endif // !DYNAMIC_LINKING
+
 
 };
 
