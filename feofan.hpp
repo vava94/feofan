@@ -1,4 +1,4 @@
-/**
+    /**
  * Created by vava94 on 28.07.2020.
  * 
  * A neural network framework class based on the TensorRT library.
@@ -19,12 +19,11 @@
 #define FEOFAN
 
 #include "neuralimage.hpp"
+#include "utils.hpp"
 
 #include <cstdlib>
-#include <functional>
 #include <map>
 #include <memory>
-#include <NvInfer.h>
 #include <string>
 
 #ifdef _WIN32
@@ -33,6 +32,8 @@
 
 using namespace std;
 using namespace nvinfer1;
+
+
 
 class Feofan {
 
@@ -46,29 +47,7 @@ private:
 #define WINCALL
 #endif
 
-    class CudaLogger : public ILogger
-    {
-        void log(Severity severity, const char* msg) override
-        {
-            switch(severity) {
-                case nvinfer1::ILogger::Severity::kINFO:
-                    ::log(std::string("CUDA: ") + msg, 0);
-                    break;
-                case nvinfer1::ILogger::Severity::kWARNING:
-                    ::log(std::string("CUDA: ") + msg, 1);
-                    break;
-                case nvinfer1::ILogger::Severity::kERROR:
-                    ::log(std::string("CUDA: ") + msg, 2);
-                    break;
-                case nvinfer1::ILogger::Severity::kINTERNAL_ERROR:
-                    ::log(std::string("CUDA: ") + msg, 2);
-                    break;
-                case Severity::kVERBOSE:
-                    ::log(std::string("CUDA: ") + msg, 0);
-                    break;
-            }
-        }
-    } cuLogger;
+
 
     enum PrecisionType
     {
@@ -137,8 +116,6 @@ private:
     function<void()> readyCallback;
     
     function<void(string)> neuralInfo;
-    function<void(string, int)> log;
-    
 
     IExecutionContext *executionContext{nullptr};
     int dlaCoresCount, networksCount;
@@ -152,11 +129,11 @@ private:
     HINSTANCE neuralAdapter;
 
 #ifdef  DYNAMIC_LINKING
-    /// Функции библиотеки neuraladapter
-    size_t(WINCALL* getLayerHeight)(nvinfer1::Dims dims, std::string networkType) = nullptr;
-    size_t(WINCALL* getLayerWidth)(nvinfer1::Dims dims, std::string networkType) = nullptr;
-    int (WINCALL* parseDetectionOutput)(void** output, float** parsed, const std::string& networkType) = nullptr;
-    void (WINCALL* setParam)(std::string paramName, std::string value) = nullptr;
+    /// Neural-adapter library functions
+    size_t(WINCALL* getLayerHeight)(nvinfer1::Dims dims, std::string networkType);
+    size_t(WINCALL* getLayerWidth)(nvinfer1::Dims dims, std::string networkType);
+    int (WINCALL* parseDetectionOutput)(void** output, float** parsed, const std::string& networkType);
+    void (WINCALL* setParam)(std::string paramName, std::string value);
 #else
     function<size_t(nvinfer1::Dims dims, std::string networkType)> getLayerHeight, getLayerWidth;
     function<int(void** output, float** parsed, const std::string& networkType)> parseDetectionOutput;

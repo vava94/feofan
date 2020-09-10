@@ -74,5 +74,3 @@ template<> inline __host__ __device__ uchar3 cast_vec( const float4& a )					{ r
 template<> inline __host__ __device__ uchar4 cast_vec( const float4& a )					{ return make_uchar4(a.x, a.y, a.z, a.w); }
 template<> inline __host__ __device__ float3 cast_vec( const float4& a )					{ return make_float3(a.x, a.y, a.z); }
 template<> inline __host__ __device__ float4 cast_vec( const float4& a )					{ return make_float4(a.x, a.y, a.z, a.w); }
-
-bool cudaAllocMapped(void **cpuPtr, void **gpuPtr, size_t size);

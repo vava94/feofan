@@ -21,6 +21,7 @@
  */
 
 #include "cudaFont.h"
+#include "utils.hpp"
 
 #include <cuda_runtime.h>
 
@@ -339,7 +340,7 @@ bool cudaFont::init( const char* filename, float size )
 		// allocate memory for the packed font texture (alpha only)
 		const size_t fontMapSize = mFontMapWidth * mFontMapHeight * sizeof(unsigned char);
 
-		if( !cudaAllocMapped((void**)&mFontMapCPU, (void**)&mFontMapGPU, fontMapSize) )
+		if (!utils::cudaAllocMapped((void**)&mFontMapCPU, (void**)&mFontMapGPU, fontMapSize) )
 		{
             log(TAG + "failed to allocate " + std::to_string(fontMapSize) + " bytes to store " +
             std::to_string(mFontMapWidth) + "x" + std::to_string(mFontMapHeight) + "font map.", 2);
@@ -419,11 +420,11 @@ bool cudaFont::init( const char* filename, float size )
 	}
 
 	// allocate memory for GPU command buffer	
-	if( !cudaAllocMapped(&mCommandCPU, &mCommandGPU, sizeof(GlyphCommand) * MaxCommands) )
+	if (!utils::cudaAllocMapped(&mCommandCPU, &mCommandGPU, sizeof(GlyphCommand) * MaxCommands) )
 		return false;
 	
 	// allocate memory for background rect buffers
-	if( !cudaAllocMapped((void**)&mRectsCPU, (void**)&mRectsGPU, sizeof(float4) * MaxCommands) )
+	if (!utils::cudaAllocMapped((void**)&mRectsCPU, (void**)&mRectsGPU, sizeof(float4) * MaxCommands) )
 		return false;
 
 	return true;

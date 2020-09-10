@@ -2,7 +2,6 @@
 // Created by vok on 06.08.2020.
 //
 #include "neuralimage.hpp"
-#include "cudaUtils.h"
 
 template<typename T_in, typename T_out>
 __global__ void cuConvert(T_in *inImage, T_out *outImage, unsigned int width, unsigned int height) {
