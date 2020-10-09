@@ -15,6 +15,13 @@
  * 
  */
 
+/** Commit
+
+Чистка кода.
+Поддержка загрузки шрифтов.
+
+*/
+
 #ifndef FEOFAN
 #define FEOFAN
 
@@ -30,10 +37,7 @@
 #include "Windows.h"
 #endif
 
-using namespace std;
 using namespace nvinfer1;
-
-
 
 class Feofan {
 
@@ -77,8 +81,8 @@ private:
 
     struct NetworkDefinition {
         int pos;
-        string filePath, enginePath;
-        string name;
+        std::string filePath, enginePath;
+        std::string name;
         DeviceType deviceType;
         IExecutionContext *executionContext{nullptr};
         void **bindings;
@@ -91,7 +95,7 @@ private:
     };
 
 
-    std::vector<string> cocoLabels = {
+    std::vector<std::string> cocoLabels = {
             "person", "bicycle", "car", "motorbike", "aeroplane",
             "bus", "train", "truck", "boat", "traffic light",
             "fire hydrant", "stop sign", "parking meter", "bench", "bird",
@@ -111,20 +115,19 @@ private:
     };
 
     bool loaded;
-    float *neuralResult;
     cudaStream_t cudaStream;
-    function<void()> readyCallback;
+    std::function<void()> readyCallback;
     
-    function<void(string)> neuralInfo;
+    std::function<void(std::string)> neuralInfo;
 
     IExecutionContext *executionContext{nullptr};
     int dlaCoresCount, networksCount;
-    map<int, NeuralImage*> neuralImages;
-    string infoString, currentNetworkAdapter;
-    vector<layerInfo> inputs, outputs;
-    vector<NetworkDefinition> networkDefinitions;
-    vector<PrecisionType> availablePrecisions;
-    vector<string> availableAdapters;
+    std::map<int, NeuralImage*> neuralImages;
+    std::string infoString, currentNetworkAdapter;
+    std::vector<layerInfo> inputs, outputs;
+    std::vector<NetworkDefinition> networkDefinitions;
+    std::vector<PrecisionType> availablePrecisions;
+    std::vector<std::string> availableAdapters;
     void **bindings;
     HINSTANCE neuralAdapter;
 
@@ -150,9 +153,21 @@ public:
     * @param logCallback            Функция обратного вызова для лога
     * @param neuralStatusCallback   Функция обратного вызова для информации о информации фрэймворка по работе нейронной сети
     */
-    explicit Feofan(function<void(string, int)> logCallback = nullptr, 
-        function<void(string)> neuralInfoCallback = nullptr);
+    explicit Feofan(std::function<void(std::string, int)> logCallback = nullptr, 
+        std::function<void(std::string)> neuralInfoCallback = nullptr);
+    /**
+    * Destructor.
+    */
     ~Feofan();
+    /**
+    * The function reserves memory for data for further work with the neural network.
+    * 
+    * @param index - 'ID' of image. Number of source for example.
+    * @param width - image width.
+    * @param height - image height.
+    * @param channels - number of color channels in the image.
+    * 
+    */
     void allocImage(int index, int width, int height, int channels);
     void applyDetections(int index);
     [[nodiscard]] int bindingsCount() const;
@@ -161,15 +176,33 @@ public:
     [[nodiscard]] uint8_t *getImage() const;
     [[nodiscard]] std::vector<layerInfo> getOutputsInfo() const;
     [[nodiscard]] int layersCount() const;
+    /**
+    * The function loads a true type font file for name captions in detection mode.
+    * 
+    * @param ttfFont - font file.
+    * 
+    */
+    void loadFont(FILE* ttfFont);
+    /**
+    * The function loads the neural network graph file.
+    * 
+    * @param networkPath - path to the network graph file.
+    * 
+    */
     void loadNetwork(std::string networkPath);
     [[nodiscard]] std::string networkName() const;
     void newData(int index, uint8_t *data);
     bool neuralInit(std::string networkPath, const std::string& caffeProtoTxtPath = "");
     //[[nodiscard]] std::string precisionTypeName() const;
-    string optimizeNetwork(string networkPath, DeviceType deviceType, PrecisionType precisionType);
+    std::string optimizeNetwork(std::string networkPath, DeviceType deviceType, PrecisionType precisionType);
+    /**
+    * The function processes all data loaded into the framework.
+    */
     void processAll();
+    /**
+    * The function processes data for a specific index.
+    */
     void processData(int index);
-    void selectBinding(std::string name, bool isInput);
     void setCurrentNetworkAdapter(std::string networkAdapter);
     void setNetworkReadyCallback(std::function<void()> callback);
 

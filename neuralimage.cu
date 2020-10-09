@@ -2,24 +2,84 @@
 // Created by vok on 06.08.2020.
 //
 #include "neuralimage.hpp"
+#include "neuralimage.cuh"
+#include "utils.hpp"
+#include <iostream>
+typedef unsigned int uint;
 
-template<typename T_in, typename T_out>
-__global__ void cuConvert(T_in *inImage, T_out *outImage, unsigned int width, unsigned int height) {
+__global__ void gpuDrawBox(uchar3* input, int boxX1, int boxY1, int boxX2, int boxY2, int imageWidth, dim3 color, uint lineWidth);
 
-    const unsigned int
-            _x = (blockIdx.x * blockDim.x) + threadIdx.x,
-            _y = (blockIdx.y * blockDim.y) + threadIdx.y;
-    if ( _x >= width || _y >= height ) return;
+__global__ void cudaApplyDetectionData(
+    uchar3* image, int width, int height, float2 scale, float* detetction, int lW, float opacity)//,
+    //uchar* font, int fontWidth, int fontHeight, GlyphCommand* commands, size_t numCommands)
+{
+    /// [x0][y0][x1][y1][type][conf]
+    
+    int _pos = (blockIdx.z) * 6 * sizeof(float);
+    //if (detetction[_pos + 5] < 0.3) return;
 
+    int _x = blockIdx.x * blockDim.x + threadIdx.x;// +x0;
+    int _y = blockIdx.y * blockDim.y + threadIdx.y;// +y0;
+    if (_x >= width || _y >= height)  return;
     const unsigned int _pixelPosition = _y * width + _x;
-    const T_in _pixelValue = inImage[_pixelPosition];
-    outImage[_pixelPosition] = make_vec<T_out>(_pixelValue.x, _pixelValue.y, _pixelValue.z, alpha(_pixelValue));
 
+    int _x0 = (int)(detetction[_pos] * scale.x);
+    int _y0 = (int)(detetction[_pos + 2] * scale.y);
+    int _x1    = (int)(detetction[_pos + 1] * scale.x);
+    int _y1    = (int)(detetction[_pos + 3] * scale.y);
+
+    const int _type  = (int)detetction[_pos + 4];
+
+    if (_x1 > width) _x1 = width;
+    if (_y1 > height) _y1 = height;
+
+    
+
+    /* if (lW > 0) {
+        /// draw vertical lines
+        if (
+            /// Vertical lines
+            /// ---
+            /// | x0 - lW < x <= x0
+            /// | y0 - lW < y < y1 + lW
+            /// ---
+            /// | x1 <= x < x1 + lW
+            /// | y0 - lW < y < y1 + lW
+            /// ---
+            ((((x0 - lW) < x && x <= x0) || ((x1 <= x && x < (x1 + lW))))
+                && (y0 - lW) < y && y < (y1 + lW)) ||
+            /// Horizontal lines
+            /// ---
+            /// | y0 - lW < y <= y0
+            /// | x0 - lW < x < x1 + lW
+            /// ---
+            /// | y1 <= y < y1 + lW
+            /// | x0 - lW < x < x1 + lW
+            /// ---
+            ((((y0 - lW) < y && y <= y0) || ((y1 <= y && y < (y1 + lW))))
+                && (x0 - lW) < x && x < (x1 + lW))
+            ) 
+        {
+            image[_pixelPosition].x = r *opacity + image[_pixelPosition].x * (1 - opacity);
+            image[_pixelPosition].y = g *opacity + image[_pixelPosition].y * (1 - opacity);
+            image[_pixelPosition].z = b *opacity + image[_pixelPosition].z * (1 - opacity);
+        } 
+    }
+    /*if (font && commands && y > y0 && x > x0) {
+        /**
+         * TODO: Исправить положение надписи 
+         */
+    /*    const auto& cmd = commands[blockIdx.x];
+        const int u = cmd.u + threadIdx.x - 1;
+        const int v = cmd.v + threadIdx.y - 1;
+        const float pxGlyph = font[v * fontWidth + u];
+        const uchar3 pxFont = { pxGlyph * r, pxGlyph * g, pxGlyph * b };
+        image[y * width + x] = pxFont;
+    }*/
 }
 
-template<typename T, bool isBGR>
-__global__ void gpuTensorMean( float2 scale, T* input, int iWidth, float* output, int oWidth, int oHeight, float mean)
-{
+
+__global__ void cudaTensorMean( float2 scale, uchar3* input, int iWidth, float* output, int oWidth, int oHeight, float mean) {
     const int x = blockIdx.x * blockDim.x + threadIdx.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -32,7 +92,7 @@ __global__ void gpuTensorMean( float2 scale, T* input, int iWidth, float* output
     const int dx = ((float)x * scale.x);
     const int dy = ((float)y * scale.y);
 
-    const T px = input[ dy * iWidth + dx ];
+    const uchar3 px = input[dy * iWidth + dx];
 
     const float3 rgb = make_float3(px.x, px.y, px.z);
 
@@ -42,12 +102,12 @@ __global__ void gpuTensorMean( float2 scale, T* input, int iWidth, float* output
 
 }
 
-__global__ void gpuDrawBox(uchar3 *input, int boxX1, int boxY1, int boxX2, int boxY2, int imageWidth, dim3 color, uint lineWidth){
+__global__ void gpuDrawBox(uchar3* input, int boxX1, int boxY1, int boxX2, int boxY2, int imageWidth, dim3 color, uint lineWidth) {
 
     const unsigned int _x = blockIdx.x * blockDim.x + threadIdx.x;
     const unsigned int _y = blockIdx.y * blockDim.y + threadIdx.y;
     const unsigned int _pixelPosition = _y * imageWidth + _x;
-    const float _a1 = 0.69f, _a2 = 0.3f;
+    const float _a1 = 0.1f, _a2 = 0.90f;
         /// Отрисовка горизонтальныя линий
     if(_x >= boxX1 && _x <= boxX2 && ((_y > (boxY1 - lineWidth) && (_y <= boxY1)) || (_y >= boxY2 && (_y < boxY2 + lineWidth)))) {
         input[_pixelPosition].x = input[_pixelPosition].x * _a1 + color.x * _a2;
@@ -62,90 +122,30 @@ __global__ void gpuDrawBox(uchar3 *input, int boxX1, int boxY1, int boxX2, int b
     }
 }
 
-template<bool isBGR>
-cudaError_t launchTensorMean( void* input, size_t inputWidth, size_t inputHeight,
-                              float* output, size_t outputWidth, size_t outputHeight,
-                              const float& mean_value, cudaStream_t stream ) {
 
-    if( !input || !output )
-        return cudaErrorInvalidDevicePointer;
-
-    if( inputWidth == 0 || outputWidth == 0 || inputHeight == 0 || outputHeight == 0 )
-        return cudaErrorInvalidValue;
-
-    const float2 scale = make_float2( float(inputWidth) / float(outputWidth),
-                                      float(inputHeight) / float(outputHeight) );
-
-    // launch kernel
-    const dim3 blockDim(8, 8);
-    const dim3 gridDim(iDivUp(outputWidth,blockDim.x), iDivUp(outputHeight,blockDim.y));
-
-    gpuTensorMean<uchar3, isBGR><<<gridDim, blockDim, 0, stream>>>(scale, (uchar3 *)input, inputWidth, output, outputWidth, outputHeight, mean_value);
-
-    return cudaGetLastError();
-
-}
-
-cudaError_t NeuralImage::cudaDrawBox(int boxX1, int boxX2, int boxY1, int boxY2, dim3 color, cudaStream_t stream, uint lineWidth, const std::string& label) {
-
-    if(imageWidth == 0 || imageHeight == 0) {
-        return cudaErrorInvalidValue;
-    }
-
-    const dim3
-            _blocKDim3(32, 8, 1),
-            _gridDim3(iDivUp(imageWidth, _blocKDim3.x), iDivUp(imageHeight, _blocKDim3.y), 3);
-
-    if(lineWidth) {
-        gpuDrawBox<<<_gridDim3, _blocKDim3, 0, stream>>>((uchar3 *) gpuImageData, boxX1, boxY1, boxX2, boxY2,
-                                                         imageWidth, color, lineWidth);
-    }
-
-    if(label.data()) {
-        font->OverlayText((void*)gpuImageData, imageWidth, imageHeight, label.data(), boxX1, boxY1 - font->height(),
-                          make_float4(255,255,255,255), make_float4(color.x,color.y,color.z,176), 3);
-    }
-
-    return cudaSuccess;
-}
-
-cudaError_t NeuralImage::cudaTensorMeanRGB(void *input, size_t inputWidth, size_t inputHeight, float *output,
-                                           size_t outputWidth, size_t outputHeight, const float &mean_value,
-                                           cudaStream_t stream) {
-    auto _a = launchTensorMean<false>(input, inputWidth, inputHeight, output, outputWidth, outputHeight, mean_value, stream);
-//    cudaStreamSynchronize(stream);
-    return _a;
-}
-
-cudaError_t NeuralImage::cudaRGB8toRGBA32(uchar3 *inImage, float3 *outImage, uint width, uint height) {
-
-    if (!inImage || !outImage) {
-        return cudaErrorInvalidDevicePointer;
-    }
-    if (width == 0 || height == 0) {
-        return cudaErrorInvalidValue;
-    }
-    const dim3
-            _blocKDim3(32, 8, 1),
-            _gridDim3(iDivUp(width, _blocKDim3.x), iDivUp(height, _blocKDim3.y), 1);
-    cuConvert<uchar3, float3><<<_gridDim3, _blocKDim3>>>(inImage, outImage, width, height);
-    return cudaGetLastError();
-
-}
-
-cudaError_t NeuralImage::cudaRGBA32toRGB8(float3 *inImage, uchar3 *outImage, uint width, uint height) {
-    if (!inImage || !outImage) {
-        return cudaErrorInvalidDevicePointer;
-    }
-    if (width == 0 || height == 0) {
-        return cudaErrorInvalidValue;
-    }
-    const dim3
-            _blocKDim3(32, 8, 1),
-            _gridDim3(iDivUp(width, _blocKDim3.x), iDivUp(height, _blocKDim3.y), 1);
-    cuConvert<float3, uchar3><<<_gridDim3, _blocKDim3>>>(inImage, outImage, width, height);
+cudaError NeuralImage::launchCudaApplyDetections(cudaStream_t stream, int detCount, int lineWidth, float opacity) {
+    const dim3 blockDim = dim3(32, 16, 1);
+    const auto gridDim = dim3(utils::divUp(imageWidth, blockDim.x), utils::divUp(imageHeight, blockDim.y), detCount);
+   
+    cudaApplyDetectionData << <gridDim, blockDim>> > ((uchar3*)imageDataGpu, imageWidth, imageHeight, mBindingScale,
+        detectionsGpu, lineWidth, opacity);// , fontMaps, fontWidth, fontHeight, commands, numCommands);
+    //cudaStreamSynchronize(stream);
+    cudaDeviceSynchronize();
     return cudaGetLastError();
 }
 
 
+cudaError launchCudaTensorMean(float2 scale, uchar3* data, int imageWidth, float* binding, int bindingWidth, int bindingHeight, float mean, cudaStream_t stream) {
 
+    const dim3 blockDim = dim3(32, 8, 1);
+    const auto gridDim = dim3(utils::divUp(bindingWidth, blockDim.x), utils::divUp(bindingHeight, blockDim.y), 1);
+    cudaTensorMean <<<gridDim, blockDim, 0, stream>>> (scale, (uchar3*)data, imageWidth, binding, bindingWidth, bindingHeight, mean);
+    return cudaGetLastError();
+
+}
+
+void NeuralImage::cudaDrawBox(int boxX1, int boxY1, int boxX2, int boxY2, dim3 color, uint lineWidth, cudaStream_t stream) {
+    const dim3 blockDim = dim3(32, 8, 1);
+    const auto gridDim = dim3(utils::divUp(imageWidth, blockDim.x), utils::divUp(imageHeight, blockDim.y), 1);
+    gpuDrawBox<<<gridDim, blockDim, 0, stream>>>((uchar3*)imageDataGpu, boxX1, boxY1, boxX2, boxY2, imageWidth, color, lineWidth);
+}

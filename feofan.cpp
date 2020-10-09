@@ -20,14 +20,17 @@
 #include <fstream>
 #include <NvInferPlugin.h>
 
+using namespace nvinfer1;
+using namespace std;
+
 #ifdef __linux__
     #include <dlfcn.h>
     const char __libname[] = "./libneuraladapter.so";
 #elif _WIN32
+string libname = "neuraladapter.dll",
+lastLibAction;
     #ifdef _MSC_VER
         #include <Windows.h>
-        string libname = "neuraladapter.dll",
-            lastLibAction;
         const char* dlerror();
     #else
         #include <dlfcn.h>
@@ -69,8 +72,8 @@ void* loadSymbol(HINSTANCE lib, const char* symbol);
 /// ----------------------------------------------
 
 
-Feofan::Feofan(function<void(string, int)> logCallback, 
-    function<void(string)> neuralInfoCallback) 
+Feofan::Feofan(function<void(string, int)> logCallback,
+    function<void(string)> neuralInfoCallback)
 {
 
     bindings = nullptr;
@@ -78,9 +81,7 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     dlaCoresCount = 0;
     loaded = false;
     networksCount = 0;
-    neuralResult = nullptr;
     readyCallback = nullptr;
-
     getLayerHeight = nullptr;
     getLayerWidth = nullptr;
     parseDetectionOutput = nullptr;
@@ -88,8 +89,8 @@ Feofan::Feofan(function<void(string, int)> logCallback,
 
     
     if (logCallback) {
-        utils::log = move(logCallback);
-        utils::log(NN_TAG "Loading neural framework.", 0);
+        utils::Log = move(logCallback);
+        utils::Log(NN_TAG "Loading neural framework.", 0);
     }
     if(neuralInfoCallback) {
         neuralInfo = move(neuralInfoCallback);
@@ -99,9 +100,9 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     /// Загрузка вспомогательной библиотеки для разбора результатов сетей
     neuralAdapter = loadLib(libname.data());
     if(!neuralAdapter) {
-        if (utils::log) {
-            utils::log(NN_TAG "Unable to load neural network adapter. Detection is disabled.", 1);
-            utils::log(NN_TAG + string(dlerror()), 2);
+        if (utils::Log) {
+            utils::Log(NN_TAG "Unable to load neural network adapter. Detection is disabled.", 1);
+            utils::Log(NN_TAG + string(dlerror()), 2);
         }
         if (neuralInfo) neuralInfo("Detection is disabled.");
         return;
@@ -109,13 +110,13 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     /// Получение информации о доступных обработчиках
     auto _getAdapters = (vector<string>(WINCALL*)())loadSymbol(neuralAdapter, "getAdapters");
     if(!_getAdapters) {
-        if (utils::log) {
-            utils::log(dlerror(), 2);
+        if (utils::Log) {
+            utils::Log(dlerror(), 2);
         }
     } else {
         availableAdapters = _getAdapters();
         if(availableAdapters.empty()) {
-            if (utils::log) utils::log("The neural network adapter is empty. Detection is disabled.", 1);
+            if (utils::Log) utils::Log("The neural network adapter is empty. Detection is disabled.", 1);
             if (neuralInfo) neuralInfo("Detection is disabled.");
             parseDetectionOutput = nullptr;
             return;
@@ -124,26 +125,26 @@ Feofan::Feofan(function<void(string, int)> logCallback,
             for(const auto& _adapter : availableAdapters) {
                 _adapterNetworks += "<br>&nbsp;&nbsp;&nbsp;&nbsp;" + _adapter + "</br>";
             }
-            if (utils::log) utils::log(_adapterNetworks, 1);
+            if (utils::Log) utils::Log(_adapterNetworks, 1);
             parseDetectionOutput = ((int(WINCALL*)(void **, float **, const string& networkType))
                     loadSymbol(neuralAdapter, "parseDetectionOutput"));
             if(!parseDetectionOutput) {
-                if (utils::log) utils::log(dlerror(), 2);
+                if (utils::Log) utils::Log(dlerror(), 2);
                 return;
             }
             getLayerHeight = (size_t(WINCALL*)(nvinfer1::Dims, string))loadSymbol(neuralAdapter, "getLayerHeight");
             if(!getLayerHeight) {
-                if (utils::log) utils::log(dlerror(), 2);
+                if (utils::Log) utils::Log(dlerror(), 2);
                 return;
             }
             getLayerWidth = (size_t(WINCALL*)(nvinfer1::Dims, string))loadSymbol(neuralAdapter, "getLayerWidth");
             if(!getLayerWidth) {
-                if (utils::log) utils::log(dlerror(), 2);
+                if (utils::Log) utils::Log(dlerror(), 2);
                 return;
             }
             setParam = (void(WINCALL*)(string, string))loadSymbol(neuralAdapter, "setParam");
             if(!setParam) {
-                if (utils::log) utils::log(dlerror(), 2);
+                if (utils::Log) utils::Log(dlerror(), 2);
                 return;
             }
         }
@@ -155,22 +156,22 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     auto _builder = nvinfer1::createInferBuilder(cudaLogger);
     dlaCoresCount = _builder->getNbDLACores();
     if (dlaCoresCount) {
-        if (utils::log) utils::log(NN_TAG "The device has support for DLA cores.", 1);
+        if (utils::Log) utils::Log(NN_TAG "The device has support for DLA cores.", 1);
     }
     if (_builder->platformHasFastInt8()) {
         availablePrecisions.emplace_back(INT8_PT);
         _fastestPrecision = "INT8";
-        if (utils::log) utils::log(NN_TAG "Available percision: INT8.", 1);
+        if (utils::Log) utils::Log(NN_TAG "Available percision: INT8.", 1);
     }
     if (_builder->platformHasFastFp16()) {
         availablePrecisions.emplace_back(FP16_PT);
         if(_fastestPrecision.empty()) {
             _fastestPrecision = "FP16";
-            if (utils::log) utils::log(NN_TAG "Available percision: FP16.", 1);
+            if (utils::Log) utils::Log(NN_TAG "Available percision: FP16.", 1);
         }
     }
     availablePrecisions.emplace_back(FP32_PT);
-    if (utils::log) utils::log(NN_TAG "Available percision: FP32.", 1);
+    if (utils::Log) utils::Log(NN_TAG "Available percision: FP32.", 1);
     if(_fastestPrecision.empty()) {
         _fastestPrecision = "FP32";
     }
@@ -219,6 +220,10 @@ int Feofan::layersCount() const {
     return 0;
 }
 
+void Feofan::loadFont(FILE* fontFile) {
+    NeuralImage::loadFont(fontFile, 12);
+}
+
 void Feofan::loadNetwork(string networkPath) {
     new thread(bind(&Feofan::neuralInit, this, placeholders::_1, placeholders::_1), networkPath);
 }
@@ -244,8 +249,8 @@ bool Feofan::neuralInit(string networkPath, const string& caffeProtoTxtPath) {
     FILE *_cacheFile;
     size_t  _engineSize;
 
-    if (utils::log) utils::log(NN_TAG "Loading network...", 0);
-    if (utils::log) utils::log(NN_TAG "Path: " + networkPath, 0);
+    if (utils::Log) utils::Log(NN_TAG "Loading network...", 0);
+    if (utils::Log) utils::Log(NN_TAG "Path: " + networkPath, 0);
 
     /// Проверка типа файла. Если ".engine" - загрузка, иначе - парсинг и оптимизация.
     if(networkPath.length() < 7 || networkPath.compare(networkPath.length() - 7, 7, ".engine") != 0) {
@@ -255,7 +260,7 @@ bool Feofan::neuralInit(string networkPath, const string& caffeProtoTxtPath) {
     }
 
     if(_enginePath.empty()) {
-        if (utils::log) utils::log("Error loading network: \"enginePath is empty\".", 2);
+        if (utils::Log) utils::Log("Error loading network: \"enginePath is empty\".", 2);
         return false;
     }
 
@@ -313,17 +318,17 @@ bool Feofan::neuralInit(string networkPath, const string& caffeProtoTxtPath) {
         _layerInfo.binding = _cudaEngine->getBindingIndex(_layerInfo.name.data());
         if(_cudaEngine->bindingIsInput(_layerInfo.binding)) {
             inputs.emplace_back(_layerInfo);
-            if (utils::log) utils::log(NN_TAG"Input layer: " + _layerInfo.name, 0);
+            if (utils::Log) utils::Log(NN_TAG"Input layer: " + _layerInfo.name, 0);
         } else {
             outputs.emplace_back(_layerInfo);
-            if (utils::log) utils::log(NN_TAG"Output layer: " + _layerInfo.name, 0);
+            if (utils::Log) utils::Log(NN_TAG"Output layer: " + _layerInfo.name, 0);
         }
     }
 
     const size_t _bindingsSize = sizeof(void*) * _cudaEngine->getNbBindings();
     bindings = (void**)malloc(_bindingsSize);
-    if(!bindings) {
-        if (utils::log) utils::log(NN_TAG"Memory allocation error for the bindings. Size: " + to_string(_bindingsSize) + ".",2);
+    if (!bindings) {
+        if (utils::Log) utils::Log(NN_TAG"Memory allocation error for the bindings. Size: " + to_string(_bindingsSize) + ".",2);
         return false;
     }
     memset(bindings, 0, _bindingsSize);
@@ -336,13 +341,13 @@ bool Feofan::neuralInit(string networkPath, const string& caffeProtoTxtPath) {
         _n ++;
     }
 
-    if (utils::log) {
+    if (utils::Log) {
         char _memStr[20] = { 0 };
         sprintf(_memStr, "%.2f", _cudaEngine->getDeviceMemorySize() * 1.0 / pow(1024, 2));
-        utils::log(NN_TAG + string("Neural network loaded: ") + string(_cudaEngine->getName()), 0);
-        utils::log(NN_TAG + string("Number of layers: ") + to_string(_cudaEngine->getNbLayers()), 0);
-        utils::log(NN_TAG + string("Number of bindings: ") + to_string(_cudaEngine->getNbBindings()), 0);
-        utils::log(NN_TAG + string("Memory used: ") + _memStr + string(" MB"), 0);
+        utils::Log(NN_TAG + string("Neural network loaded: ") + string(_cudaEngine->getName()), 0);
+        utils::Log(NN_TAG + string("Number of layers: ") + to_string(_cudaEngine->getNbLayers()), 0);
+        utils::Log(NN_TAG + string("Number of bindings: ") + to_string(_cudaEngine->getNbBindings()), 0);
+        utils::Log(NN_TAG + string("Memory used: ") + _memStr + string(" MB"), 0);
     }
 
     if(readyCallback) {
@@ -377,7 +382,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         using namespace nvonnxparser;
         auto _onnxParser = createParser(*_network, cudaLogger);
         if (!_onnxParser->parseFromFile(modelPath.data(), 3)) {
-            if (utils::log) utils::log(NN_TAG"Error parsing '.onnx' file.", 2);
+            if (utils::Log) utils::Log(NN_TAG"Error parsing '.onnx' file.", 2);
             _onnxParser->destroy();
             return _enginePath;
         }
@@ -398,7 +403,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         string _prototxt = modelPath.substr(0, modelPath.length() - 6) + ".prototxt";
 
         if (!fs::exists(_prototxt)) {
-            if (utils::log) utils::log(NN_TAG "File '" + _prototxt + "' not found.", 2);
+            if (utils::Log) utils::Log(NN_TAG "File '" + _prototxt + "' not found.", 2);
             return "";
         }
 
@@ -407,7 +412,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         const auto _blobNameToTensor = _caffeParser->parse(_prototxt.data(), modelPath.data(),
                                                            *_network, nvinfer1::DataType::kFLOAT);
         if(!_blobNameToTensor) {
-            if (utils::log) utils::log(NN_TAG "Error parsing '.caffe' file.", 2);
+            if (utils::Log) utils::Log(NN_TAG "Error parsing '.caffe' file.", 2);
             _caffeParser->destroy();
             shutdownProtobufLibrary();
             return "";
@@ -429,7 +434,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         using namespace nvuffparser;
         auto _uffParser = createUffParser();
         if (!_uffParser->parse(modelPath.data(), *_network)){
-            if (utils::log) utils::log(NN_TAG"Error parsung '.uff' file.", 2);
+            if (utils::Log) utils::Log(NN_TAG"Error parsung '.uff' file.", 2);
             shutdownProtobufLibrary();
             _uffParser->destroy();
             return _enginePath;
@@ -452,7 +457,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
     }
         /// Underfined
     else {
-        if (utils::log) utils::log(NN_TAG"Unsupported model type. Supported file types:"
+        if (utils::Log) utils::Log(NN_TAG"Unsupported model type. Supported file types:"
             "<br>&nbsp;&nbsp;&nbsp;&nbsp;caffe</br>"
             "<br>&nbsp;&nbsp;&nbsp;&nbsp;engine</br>"
             "<br>&nbsp;&nbsp;&nbsp;&nbsp;onnx</br>"
@@ -479,7 +484,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         }
         else
         {
-            if (utils::log) utils::log("Can't set percision.", 2);
+            if (utils::Log) utils::Log("Can't set percision.", 2);
             return "";
         }
         _enginePath += "_GPU";
@@ -517,7 +522,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
             ofstream _ofStream(_enginePath.data(), ios::binary);
             _ofStream.write((const char *)_iHostMemory->data(), _iHostMemory->size());
         } else {
-            if (utils::log) utils::log("Engine creation error.", 2);
+            if (utils::Log) utils::Log("Engine creation error.", 2);
         }
 
     }
@@ -538,59 +543,24 @@ void Feofan::processData(int index) {
     int
         _inputWidth = getLayerWidth(inputs[0].dims, currentNetworkAdapter),
         _inputHeight = getLayerHeight(inputs[0].dims, currentNetworkAdapter);
+    neuralImages[index]->lockImage();
     neuralImages[index]->prepareTensor(cudaStream,
                                        inputs[0].CUDA,
                                        _inputWidth,
                                        _inputHeight,
-                                       256.f);
+                                       255.f);
     executionContext->enqueueV2(bindings, cudaStream, nullptr);
     cudaStreamSynchronize(cudaStream);
 
-    auto _numDetections = parseDetectionOutput(&bindings[1], &neuralResult, currentNetworkAdapter);
-    float
-        _scaleX = (float)neuralImages[index]->width() / (float)_inputWidth,
-        _scaleY = (float)neuralImages[index]->height() / (float)_inputHeight;
-    double _cx, _cy, _cz;
-    dim3 _color;
-    if(_numDetections  == 0) return;
-    auto _detSize = sizeof(float) * 6;
-    char percent[6];
-    for (int _i = 0; _i < _numDetections; _i ++) {
-
-        if(neuralResult[_i * _detSize + 5] > 0.3) {
-
-            _cx = sin(neuralResult[_i * _detSize + 4] * 4.5 * 3.14 / 180);
-            _cy = sin((neuralResult[_i * _detSize + 4] + 26) * 4.5 * 3.14 / 180);
-            _cz = sin((neuralResult[_i * _detSize + 4] + 53) * 4.5 * 3.14 / 180);
-            if (_cx < 0) _cx += 1;
-            if (_cy < 0) _cy += 1;
-            if (_cz < 0) _cz += 1;
-            _color.x = (unsigned int) (_cx * 255.);
-            _color.y = (unsigned int) (_cy * 255.);
-            _color.z = (unsigned int) (_cz * 255.);
-            sprintf(percent, "%.2f", neuralResult[_i * _detSize + 5] * 100);
-            neuralImages[index]->cudaDrawBox(
-                    (int)(neuralResult[_i * _detSize] * _scaleX),
-                    (int)(neuralResult[_i * _detSize + 2] * _scaleX),
-                    (int)(neuralResult[_i * _detSize + 1] * _scaleY),
-                    (int)(neuralResult[_i * _detSize + 3] * _scaleY),
-                    _color,
-                    cudaStream,
-                    3,
-                    cocoLabels[neuralResult[_i * _detSize + 4]] + " " +
-                    percent + "%");
-        }
+    auto _numDetections = parseDetectionOutput(&bindings[1], neuralImages[index]->detectionsDataPtr(), currentNetworkAdapter);
+    if (_numDetections) {
+        neuralImages[index]->applyDetections(_numDetections, NeuralImage::BOX | NeuralImage::CONFIDENCE | NeuralImage::LABEL, 3);
     }
-    cudaStreamSynchronize(cudaStream);
-
-}
-
-void Feofan::selectBinding(string name, bool isInput) {
-    /// TODO
+    neuralImages[index]->unlockImage();
 }
 
 void Feofan::setCurrentNetworkAdapter(string networkAdapter) {
-    if (utils::log) utils::log(NN_TAG "Selected neural adapter for " + networkAdapter, 0);
+    if (utils::Log) utils::Log(NN_TAG "Selected neural adapter for " + networkAdapter, 0);
     currentNetworkAdapter = move(networkAdapter);
     setParam(currentNetworkAdapter + ".InputSize", to_string(getLayerWidth(inputs[0].dims, currentNetworkAdapter)));
 }
@@ -631,8 +601,7 @@ void Feofan::setSetParamCallback(function<void(string paramName, string value)> 
 Feofan::~Feofan() {
 
 }
-
-
+/// ---------------------------------------------------------------------------------------------------------
 /// Вспомогательные функции загрузки библиотек
 HINSTANCE loadLib(string path) {
 
