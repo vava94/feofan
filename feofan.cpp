@@ -102,7 +102,10 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     if(!neuralAdapter) {
         if (utils::Log) {
             utils::Log(NN_TAG "Unable to load neural network adapter. Detection is disabled.", 1);
-            utils::Log(NN_TAG + string(dlerror()), 2);
+            auto _a1 = dlerror();
+            std::string _err(_a1);
+            utils::Log(NN_TAG + _err, 2);
+            delete[] _a1;
         }
         if (neuralInfo) neuralInfo("Detection is disabled.");
         return;
@@ -111,7 +114,10 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     auto _getAdapters = (vector<string>(WINCALL*)())loadSymbol(neuralAdapter, "getAdapters");
     if(!_getAdapters) {
         if (utils::Log) {
-            utils::Log(dlerror(), 2);
+            auto _a1 = dlerror();
+            std::string _err(_a1);
+            utils::Log(NN_TAG + _err, 2);
+            delete[] _a1;
         }
     } else {
         availableAdapters = _getAdapters();
@@ -129,22 +135,42 @@ Feofan::Feofan(function<void(string, int)> logCallback,
             parseDetectionOutput = ((int(WINCALL*)(void **, float **, const string& networkType))
                     loadSymbol(neuralAdapter, "parseDetectionOutput"));
             if(!parseDetectionOutput) {
-                if (utils::Log) utils::Log(dlerror(), 2);
+                if (utils::Log) {
+                    auto _a1 = dlerror();
+                    std::string _err(_a1);
+                    utils::Log(NN_TAG + _err, 2);
+                    delete[] _a1;
+                }
                 return;
             }
             getLayerHeight = (size_t(WINCALL*)(nvinfer1::Dims, string))loadSymbol(neuralAdapter, "getLayerHeight");
             if(!getLayerHeight) {
-                if (utils::Log) utils::Log(dlerror(), 2);
+                if (utils::Log){
+                    auto _a1 = dlerror();
+                    std::string _err(_a1);
+                    utils::Log(NN_TAG + _err, 2);
+                    delete[] _a1;
+                }
                 return;
             }
             getLayerWidth = (size_t(WINCALL*)(nvinfer1::Dims, string))loadSymbol(neuralAdapter, "getLayerWidth");
             if(!getLayerWidth) {
-                if (utils::Log) utils::Log(dlerror(), 2);
+                if (utils::Log) {
+                    auto _a1 = dlerror();
+                    std::string _err(_a1);
+                    utils::Log(NN_TAG + _err, 2);
+                    delete[] _a1;
+                }
                 return;
             }
             setParam = (void(WINCALL*)(string, string))loadSymbol(neuralAdapter, "setParam");
             if(!setParam) {
-                if (utils::Log) utils::Log(dlerror(), 2);
+                if (utils::Log) {
+                    auto _a1 = dlerror();
+                    std::string _err(_a1);
+                    utils::Log(NN_TAG + _err, 2);
+                    delete[] _a1;
+                }
                 return;
             }
         }
@@ -631,6 +657,9 @@ void* loadSymbol(HINSTANCE lib, const char *symbol) {
 #ifdef _MSC_VER
 const char * dlerror() {
     string _errorString = "Error at action \"" + lastLibAction + "\"";
-    return move(_errorString.data());
+    const char *_ch = new const char[_errorString.size() + 1]();
+    memset((void *) _ch, 0,  _errorString.size() + 1);
+    memcpy((void *) _ch, (void *) _errorString.c_str(), _errorString.size());
+    return _ch;
 }
 #endif
