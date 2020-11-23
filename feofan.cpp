@@ -5,30 +5,33 @@
  * TODO: Включить профайлер
  * TODO: Деструктор
  * TODO: Loading labels from file
+ * TODO: Посмотреть примеры и настроить калибратор
  */
 
 #include "feofan.hpp"
 
 #include <cmath>
 #include <cuda.h>
-#include <cuda_runtime.h>
 #include <memory.h>
 #include <NvCaffeParser.h>
 #include <NvOnnxParser.h>
 #include <thread>
 #include <NvUffParser.h>
 #include <fstream>
-#include <NvInferPlugin.h>
 
 using namespace nvinfer1;
 using namespace std;
+#define NN_TAG "NN: "
 
+/********************************************************************
+ * Dynamic lib load section
+ ********************************************************************/
 #ifdef __linux__
     #include <dlfcn.h>
-    const char __libname[] = "./libneuraladapter.so";
+    const char libname[] = "./libneuraladapter.so";
 #elif _WIN32
-string libname = "neuraladapter.dll",
-lastLibAction;
+    const std::string libname = "neuraladapter.dll";
+    std::string lastLibAction;
     #ifdef _MSC_VER
         #include <Windows.h>
         const char* dlerror();
@@ -36,7 +39,9 @@ lastLibAction;
         #include <dlfcn.h>
     #endif
 #endif
-
+/********************************************************************
+ * Filesystem dependencies
+ *******************************************************************/
 #if !_HAS_CXX17
     #ifdef _MSC_VER
         #ifndef _SILENCE_EXPERIMENTAL_FILESYSTEM_DEPRECATION_WARNING
@@ -50,10 +55,9 @@ lastLibAction;
     namespace fs = filesystem;
 #endif
 
-#define NN_TAG "NN: "
-
-/// --- Platform dependent functions
-
+/********************************************************************
+ * Platform dependent functions
+ *******************************************************************/
 /**
  * Dynamic library loading function.
  * @param path Library path.
@@ -68,15 +72,17 @@ HINSTANCE loadLib(string path);
  * @return pointer to function.
  */
 void* loadSymbol(HINSTANCE lib, const char* symbol);
+///******************************************************************
 
-/// ----------------------------------------------
-
-
+/**
+ * Constructor
+ * @param logCallback callback for logs
+ * @param neuralInfoCallback callback for network infos (ex FPS)
+ */
 Feofan::Feofan(function<void(string, int)> logCallback,
     function<void(string)> neuralInfoCallback)
 {
 
-    bindings = nullptr;
     cudaStream = nullptr;
     dlaCoresCount = 0;
     loaded = false;
@@ -87,7 +93,6 @@ Feofan::Feofan(function<void(string, int)> logCallback,
     parseDetectionOutput = nullptr;
     setParam = nullptr;
 
-    
     if (logCallback) {
         utils::Log = move(logCallback);
         utils::Log(NN_TAG "Loading neural framework.", 0);
@@ -98,7 +103,7 @@ Feofan::Feofan(function<void(string, int)> logCallback,
 
 #ifdef DYNAMIC_LINKING
     /// Загрузка вспомогательной библиотеки для разбора результатов сетей
-    neuralAdapter = loadLib(libname.data());
+    neuralAdapter = loadLib(libname);
     if(!neuralAdapter) {
         if (utils::Log) {
             utils::Log(NN_TAG "Unable to load neural network adapter. Detection is disabled.", 1);
@@ -185,19 +190,19 @@ Feofan::Feofan(function<void(string, int)> logCallback,
         if (utils::Log) utils::Log(NN_TAG "The device has support for DLA cores.", 1);
     }
     if (_builder->platformHasFastInt8()) {
-        availablePrecisions.emplace_back(INT8_PT);
+        availablePrecisions.emplace_back(precisionsStr[2]);
+        if (utils::Log) utils::Log(NN_TAG "Available precision: INT8.", 1);
         _fastestPrecision = "INT8";
-        if (utils::Log) utils::Log(NN_TAG "Available percision: INT8.", 1);
     }
     if (_builder->platformHasFastFp16()) {
-        availablePrecisions.emplace_back(FP16_PT);
+        availablePrecisions.emplace_back(precisionsStr[1]);
+        if (utils::Log) utils::Log(NN_TAG "Available precision: FP16.", 1);
         if(_fastestPrecision.empty()) {
             _fastestPrecision = "FP16";
-            if (utils::Log) utils::Log(NN_TAG "Available percision: FP16.", 1);
         }
     }
-    availablePrecisions.emplace_back(FP32_PT);
-    if (utils::Log) utils::Log(NN_TAG "Available percision: FP32.", 1);
+    availablePrecisions.emplace_back(precisionsStr[0]);
+    if (utils::Log) utils::Log(NN_TAG "Available precision: FP32.", 1);
     if(_fastestPrecision.empty()) {
         _fastestPrecision = "FP32";
     }
@@ -206,6 +211,13 @@ Feofan::Feofan(function<void(string, int)> logCallback,
                      to_string(NV_TENSORRT_PATCH) + " | " + _fastestPrecision + " | ";
         neuralInfo(infoString + "  0.00 FPS");
     }
+
+
+    if(cudaStreamCreateWithFlags(&cudaStream, cudaStreamDefault) != cudaSuccess) {
+        if (utils::Log) utils::Log(NN_TAG "Error creating cuda stream.", 2);
+        return;
+    }
+
     loaded = true;
 
 }
@@ -218,32 +230,40 @@ void Feofan::allocImage(int index, int width, int height, int channels) {
 
 }
 
-int Feofan::bindingsCount() const {
-    /// TODO: Количество точек
-    //if (!cudaEngine) return -1;
-    return 4;
+void Feofan::closeNetwork(int pos) {
+
+    networkDefinitions[pos].executionContext->destroy();
+    networkDefinitions[pos].engine->destroy();
+
+    cudaFreeHost(networkDefinitions[pos].input.CPU);
+    cudaFree(networkDefinitions[pos].input.CUDA);
+
+    for (const auto &mLayer : networkDefinitions[pos].outputs) {
+        cudaFreeHost(mLayer.CPU);
+        cudaFree(mLayer.CUDA);
+    }
+
+    networkDefinitions[pos].outputs.clear();
+    delete networkDefinitions[pos].bindings;
+    networkDefinitions.erase(networkDefinitions.begin() + pos);
+    readyCallback(pos, false);
 }
 
-vector<string> Feofan::getAdapters() const{
+vector<string> Feofan::getAdapters() const {
     return availableAdapters;
 }
 
-vector<Feofan::layerInfo> Feofan::getInputsInfo() const {
-    return inputs;
+const std::vector<std::string>& Feofan::getAvailablePrecisions() {
+    return availablePrecisions;
 }
 
 uint8_t *Feofan::getImage() const {
+    //TODO: Получение изображения по позиции
     return neuralImages.at(0)->data();
 }
 
-vector<Feofan::layerInfo> Feofan::getOutputsInfo() const {
-    return outputs;
-}
-
-int Feofan::layersCount() const {
-    /// TODO: Количество слоёв
-    //if(!cudaEngine) return -1;
-    return 0;
+Feofan::NetworkDefinition Feofan::getNetworkDefinition(int pos) {
+    return networkDefinitions.at(pos);
 }
 
 void Feofan::loadFont(FILE* fontFile) {
@@ -259,131 +279,179 @@ void Feofan::newData(int index, uint8_t *data) {
     neuralImages.at(index)->newData(data);
 }
 
-string Feofan::networkName() const {
-    /// TODO: Имя сети
-    //if (!cudaEngine) return "Сеть не загружена.";
-    return "cudaEngine->getName()";
+string Feofan::networkName(int networkIndex) const {
+
+    if (networkDefinitions.size() <= networkIndex) return "Сеть не загружена.";
+    return networkDefinitions[networkIndex].name;
 }
 
-bool Feofan::neuralInit(string networkPath, const string& caffeProtoTxtPath) {
-    
-    /// TODO: add loaded network to the vector of network definitions
-    
-    ICudaEngine *_cudaEngine;
-    string _enginePath;
-    char *_engineStream;
-    FILE *_cacheFile;
-    size_t  _engineSize;
+void Feofan::neuralInit(const string& networkPath, const string& caffeProtoTxtPath) {
 
+    /// TODO: add loaded network to the vector of network definitions
+    const int mPos = (int)networkDefinitions.size();
+    size_t mMemFree0, mMemFree2, mMemTotal, mMemAllocated;
+
+    char *mEngineStream;
+    FILE *mCacheFile;
+    ICudaEngine *mCudaEngine;
+    IExecutionContext *mExecutionContext;
+    IRuntime *mRuntime;
+    NetworkDefinition mNetworkDefinition;
+    size_t mBindingsSize, mEngineSize;
+    string mEnginePath;
+    vector<layerInfo> mInputs, mOutputs;
+
+    if (utils::Log) utils::Log(NN_TAG "***************************************", 0);
     if (utils::Log) utils::Log(NN_TAG "Loading network...", 0);
     if (utils::Log) utils::Log(NN_TAG "Path: " + networkPath, 0);
-
+    if (utils::Log) utils::Log(NN_TAG "***************************************", 0);
     /// Проверка типа файла. Если ".engine" - загрузка, иначе - парсинг и оптимизация.
     if(networkPath.length() < 7 || networkPath.compare(networkPath.length() - 7, 7, ".engine") != 0) {
-        _enginePath = optimizeNetwork(networkPath, DeviceType::DEVICE_GPU, PrecisionType::FP32_PT);
+        mEnginePath = optimizeNetwork(networkPath, DeviceType::DEVICE_GPU, PrecisionType::FP32_PT);
     } else {
-        _enginePath = networkPath;
+        mEnginePath = networkPath;
     }
 
-    if(_enginePath.empty()) {
-        if (utils::Log) utils::Log("Error loading network: \"enginePath is empty\".", 2);
-        return false;
+    if(mEnginePath.empty()) {
+        if (utils::Log) utils::Log(NN_TAG "Error loading network: \"enginePath is empty\".", 2);
+        readyCallback(mPos, false);
+        return;
     }
 
-    IRuntime *_runtime = createInferRuntime(cudaLogger);
-
-    if (!_runtime) {
-        return false;
+    mRuntime = createInferRuntime(cudaLogger);
+    cuMemGetInfo(&mMemFree0, &mMemTotal);
+    if (!mRuntime) {
+        if (utils::Log) utils::Log(NN_TAG "Error creating infer runtime.", 2);
+        readyCallback(mPos, false);
+        return;
     }
 
-    if ((_engineSize = fs::file_size(_enginePath.data())) == 0){
-        return false;
+    if ((mEngineSize = fs::file_size(mEnginePath.data())) == 0){
+        if (utils::Log) utils::Log(NN_TAG "Error loading network: \"engine file size is 0\".", 2);
+        mRuntime->destroy();
+        readyCallback(mPos, false);
+        return;
     }
-    _engineStream = (char*)malloc(_engineSize);
+    mEngineStream = new char[mEngineSize];
+    //TODO: remove
+    //mEngineStream = (char*)malloc(mEngineSize);
 
-    _cacheFile = fopen(_enginePath.data(), "rb");
-    if(fread(_engineStream, 1, _engineSize, _cacheFile) != _engineSize) {
-        return false;
+    mCacheFile = fopen(mEnginePath.data(), "rb");
+    if(fread(mEngineStream, 1, mEngineSize, mCacheFile) != mEngineSize) {
+        if (utils::Log) utils::Log(NN_TAG "Error reading engine file.", 2);
+        readyCallback(mPos, false);
+        mRuntime->destroy();
+        delete[] mEngineStream;
+        fclose(mCacheFile);
+        return;
     }
-    fclose(_cacheFile);
+    fclose(mCacheFile);
 
-    if(cudaStreamCreateWithFlags(&cudaStream, cudaStreamDefault) != cudaSuccess) {
-        return false;
+
+    mCudaEngine = mRuntime->deserializeCudaEngine(mEngineStream, mEngineSize);
+    if (!mCudaEngine) {
+        if (utils::Log) utils::Log(NN_TAG "Error creating cuda engine.", 2);
+        readyCallback(mPos, false);
+        mRuntime->destroy();
+        delete[] mEngineStream;
+        fclose(mCacheFile);
+        return;
     }
 
-    _cudaEngine = _runtime->deserializeCudaEngine(_engineStream, _engineSize);
-    if (!_cudaEngine) {
-        return false;
-    }
+    mExecutionContext = mCudaEngine->createExecutionContext();
 
-    executionContext = _cudaEngine->createExecutionContext();
-
-    for(int _i = 0; _i < _cudaEngine->getNbBindings(); _i++) {
+    for(int _i = 0; _i < mCudaEngine->getNbBindings(); _i++) {
         layerInfo _layerInfo;
         void *cpuBind = nullptr;
         void *gpuBind = nullptr;
-        Dims _dims = validateDims(_cudaEngine->getBindingDimensions(_i));
+        Dims _dims = validateDims(mCudaEngine->getBindingDimensions(_i));
         /** TODO: Для onnx:
          *	    if( modelType == MODEL_ONNX )
          *	        inputDims = shiftDims(inputDims);   // change NCHW to CHW if EXPLICIT_BATCH set
          */
-        size_t _bindSize = _cudaEngine->getMaxBatchSize() * sizeof(float);
+        size_t _bindSize = mCudaEngine->getMaxBatchSize() * sizeof(float);
         for (int _j = 0; _j < _dims.nbDims; _j++) {
             _bindSize = _bindSize * _dims.d[_j];
         }
 
         if (!utils::cudaAllocMapped((void**)&cpuBind, (void**)&gpuBind, _bindSize) ) {
-            return false;
+            readyCallback(mPos, false);
+            return;
         }
 
         _layerInfo.CPU = (float *) cpuBind;
         _layerInfo.CUDA = (float *) gpuBind;
         _layerInfo.size = _bindSize;
-        _layerInfo.name = _cudaEngine->getBindingName(_i);
+        _layerInfo.name = mCudaEngine->getBindingName(_i);
         _layerInfo.dims = _dims;
-        _layerInfo.binding = _cudaEngine->getBindingIndex(_layerInfo.name.data());
-        if(_cudaEngine->bindingIsInput(_layerInfo.binding)) {
-            inputs.emplace_back(_layerInfo);
+        _layerInfo.binding = mCudaEngine->getBindingIndex(_layerInfo.name.data());
+        if(mCudaEngine->bindingIsInput(_layerInfo.binding)) {
+            mInputs.emplace_back(_layerInfo);
             if (utils::Log) utils::Log(NN_TAG"Input layer: " + _layerInfo.name, 0);
         } else {
-            outputs.emplace_back(_layerInfo);
+            mOutputs.emplace_back(_layerInfo);
             if (utils::Log) utils::Log(NN_TAG"Output layer: " + _layerInfo.name, 0);
         }
     }
 
-    const size_t _bindingsSize = sizeof(void*) * _cudaEngine->getNbBindings();
-    bindings = (void**)malloc(_bindingsSize);
-    if (!bindings) {
-        if (utils::Log) utils::Log(NN_TAG"Memory allocation error for the bindings. Size: " + to_string(_bindingsSize) + ".",2);
-        return false;
+    mBindingsSize = sizeof(void*) * mCudaEngine->getNbBindings();
+    mNetworkDefinition.bindings = (void**)malloc(mBindingsSize);
+    if (!mNetworkDefinition.bindings) {
+        if (utils::Log) utils::Log(NN_TAG"Memory allocation error for the bindings. Size: " + to_string(mBindingsSize) + ".",2);
+        //TODO: деинитиализация переменных
+        readyCallback(mPos, false);
+        return;
     }
-    memset(bindings, 0, _bindingsSize);
-    for (const auto& _input: inputs) {
-        bindings[_input.binding] = (void*)_input.CUDA;
+    memset(mNetworkDefinition.bindings, 0, mBindingsSize);
+    for (const auto& mInput: mInputs) {
+        mNetworkDefinition.bindings[mInput.binding] = (void*)mInput.CUDA;
+
     }
     int _n = 0;
-    for(const auto& _output: outputs) {
-        bindings[_output.binding] = (void*)_output.CUDA;
+    for(const auto& mOutput: mOutputs) {
+        mNetworkDefinition.bindings[mOutput.binding] = (void*)mOutput.CUDA;
         _n ++;
     }
-
+    mRuntime->destroy();
+    cuMemGetInfo(&mMemFree2, &mMemTotal);
+    mMemAllocated = mMemFree0 - mMemFree2;
+    /// Вывод информации о загруженной сети
     if (utils::Log) {
         char _memStr[20] = { 0 };
-        sprintf(_memStr, "%.2f", _cudaEngine->getDeviceMemorySize() * 1.0 / pow(1024, 2));
-        utils::Log(NN_TAG + string("Neural network loaded: ") + string(_cudaEngine->getName()), 0);
-        utils::Log(NN_TAG + string("Number of layers: ") + to_string(_cudaEngine->getNbLayers()), 0);
-        utils::Log(NN_TAG + string("Number of bindings: ") + to_string(_cudaEngine->getNbBindings()), 0);
+        //size_t memAlloc = mCudaEngine->getDeviceMemorySize() + mInputs[0].size;
+
+
+        utils::Log(NN_TAG "***************************************", 0);
+        sprintf(_memStr, "%.2f", (mMemAllocated) * 1.0 / pow(1024, 2));
+        utils::Log(NN_TAG + string("Neural network loaded: ") + string(mCudaEngine->getName()), 0);
+        utils::Log(NN_TAG + string("Number of layers: ") + to_string(mCudaEngine->getNbLayers()), 0);
+        utils::Log(NN_TAG + string("Number of bindings: ") + to_string(mCudaEngine->getNbBindings()), 0);
         utils::Log(NN_TAG + string("Memory used: ") + _memStr + string(" MB"), 0);
+        utils::Log(NN_TAG "***************************************", 0);
     }
+
+    /// Запись информации в networkDefinition
+    mNetworkDefinition.name = mCudaEngine->getName();
+    mNetworkDefinition.enginePath = mEnginePath;
+    mNetworkDefinition.filePath = networkPath;
+    mNetworkDefinition.executionContext = mExecutionContext;
+    mNetworkDefinition.engine = mCudaEngine;
+    mNetworkDefinition.nbLayers = mCudaEngine->getNbLayers();
+    mNetworkDefinition.input = mInputs[0];
+    mNetworkDefinition.outputs.insert(mNetworkDefinition.outputs.cbegin(), mOutputs.cbegin(), mOutputs.cend());
+    mNetworkDefinition.memory = mMemAllocated;
+    networkDefinitions.emplace_back(mNetworkDefinition);
 
     if(readyCallback) {
-        readyCallback();
+        readyCallback(mPos, true);
     }
 
-    /// ПОКА ТОЛЬКО YOLO 3
-    setCurrentNetworkAdapter(string("Yolo v3"));
 
-    return true;
+
+    /// ПОКА ТОЛЬКО YOLO 3
+    setCurrentNetworkAdapter(mPos, string("Yolo v3"));
+
+
 }
 
 string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, PrecisionType precisionType) {
@@ -397,7 +465,6 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
     function<void()> _destroyParser;
     const auto _explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
     auto _network = _builder->createNetworkV2(_explicitBatch);
-    NetworkDefinition _networkDefinition;
     string _enginePath;
     ICudaEngine *_cudaEngine;
 
@@ -417,8 +484,8 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         };
         _enginePath = modelPath.substr(0,modelPath.length() - 5);
         auto _p = _enginePath.find_last_of('/') + 1;
-        _networkDefinition.name = _enginePath.substr(_p,modelPath.length() - _p);
-        _network->setName(_networkDefinition.name.data());
+        auto mName = _enginePath.substr(_p,modelPath.length() - _p);
+        _network->setName(mName.data());
         _enginePath += "_onnx";
 
     }
@@ -449,8 +516,8 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         };
         _enginePath = modelPath.substr(0,modelPath.length() - 6);
         auto _p = _enginePath.find_last_of('/') + 1;
-        _networkDefinition.name = _enginePath.substr(_p,modelPath.length() - _p);
-        _network->setName(_networkDefinition.name.data());
+        auto mName = _enginePath.substr(_p,modelPath.length() - _p);
+        _network->setName(mName.data());
         _enginePath += "_caffe";
 
     }
@@ -471,8 +538,8 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         };
         _enginePath = modelPath.substr(0,modelPath.length() - 4);
         auto _p = _enginePath.find_last_of('/') + 1;
-        _networkDefinition.name = _enginePath.substr(_p,modelPath.length() - _p);
-        _network->setName(_networkDefinition.name.data());
+        auto mName = _enginePath.substr(_p,modelPath.length() - _p);
+        _network->setName(mName.data());
         _enginePath += "_uff";
 
     }
@@ -495,17 +562,17 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
         _enginePath += "_" + to_string(NV_TENSORRT_MAJOR) + to_string(NV_TENSORRT_MINOR) +
                        to_string(NV_TENSORRT_PATCH);
         if (precisionType == FP32_PT ||
-           (precisionType == FASTEST_PT && availablePrecisions[0] == FP32_PT))
+           (precisionType == FASTEST_PT && availablePrecisions[0] == "FP32_PT"))
         {
             _enginePath += "_FP32";
         }
         else if (precisionType == FP16_PT ||
-                (precisionType == FASTEST_PT && availablePrecisions[0] == FP16_PT))
+                (precisionType == FASTEST_PT && availablePrecisions[0] == "FP16_PT"))
         {
             _enginePath += "_FP16";
         }
         else if (precisionType == INT8_PT ||
-                (precisionType == FASTEST_PT && availablePrecisions[0] == INT8_PT)) {
+                (precisionType == FASTEST_PT && availablePrecisions[0] == "INT8_PT")) {
             _enginePath += "_INT8";
         }
         else
@@ -523,11 +590,13 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
 
         auto _config = _builder->createBuilderConfig();
         /// Выбор оптимизации
-        if(availablePrecisions[0] == FP16_PT) {
+        if(precisionType == FP16_PT ||
+           (precisionType == FASTEST_PT && availablePrecisions[0] == "FP16_PT")) {
             _config->setFlag(nvinfer1::BuilderFlag::kFP16);
-        } else if(availablePrecisions[0] == INT8_PT) {
+        } else if(precisionType == INT8_PT ||
+                  (precisionType == FASTEST_PT && availablePrecisions[0] == "INT8_PT")) {
             _config->setFlag(nvinfer1::BuilderFlag::kINT8);
-        }
+        } else
 
         /// Проверка и подключение DLA
         if(_builder->getNbDLACores() > 0) {
@@ -549,6 +618,7 @@ string Feofan::optimizeNetwork(string modelPath, DeviceType deviceType, Precisio
             _ofStream.write((const char *)_iHostMemory->data(), _iHostMemory->size());
         } else {
             if (utils::Log) utils::Log("Engine creation error.", 2);
+            _enginePath.clear();
         }
 
     }
@@ -565,30 +635,30 @@ void Feofan::processAll() {
     }
 }
 
-void Feofan::processData(int index) {
+void Feofan::processData(int networkIndex) {
     int
-        _inputWidth = getLayerWidth(inputs[0].dims, currentNetworkAdapter),
-        _inputHeight = getLayerHeight(inputs[0].dims, currentNetworkAdapter);
-    neuralImages[index]->lockImage();
-    neuralImages[index]->prepareTensor(cudaStream,
-                                       inputs[0].CUDA,
+        _inputWidth = getLayerWidth(networkDefinitions[networkIndex].input.dims, currentNetworkAdapter),
+        _inputHeight = getLayerHeight(networkDefinitions[networkIndex].input.dims, currentNetworkAdapter);
+    neuralImages[networkIndex]->lockImage();
+    neuralImages[networkIndex]->prepareTensor(cudaStream,
+                                       networkDefinitions[networkIndex].input.CUDA,
                                        _inputWidth,
                                        _inputHeight,
                                        255.f);
-    executionContext->enqueueV2(bindings, cudaStream, nullptr);
+    networkDefinitions[networkIndex].executionContext->enqueueV2(networkDefinitions[networkIndex].bindings, cudaStream, nullptr);
     cudaStreamSynchronize(cudaStream);
 
-    auto _numDetections = parseDetectionOutput(&bindings[1], neuralImages[index]->detectionsDataPtr(), currentNetworkAdapter);
+    auto _numDetections = parseDetectionOutput(&networkDefinitions[networkIndex].bindings[1], neuralImages[networkIndex]->detectionsDataPtr(), currentNetworkAdapter);
     if (_numDetections) {
-        neuralImages[index]->applyDetections(_numDetections, NeuralImage::BOX | NeuralImage::CONFIDENCE | NeuralImage::LABEL, 3);
+        neuralImages[networkIndex]->applyDetections(_numDetections, NeuralImage::BOX | NeuralImage::CONFIDENCE | NeuralImage::LABEL, 3);
     }
-    neuralImages[index]->unlockImage();
+    neuralImages[networkIndex]->unlockImage();
 }
 
-void Feofan::setCurrentNetworkAdapter(string networkAdapter) {
+void Feofan::setCurrentNetworkAdapter(int networkIndex, string networkAdapter) {
     if (utils::Log) utils::Log(NN_TAG "Selected neural adapter for " + networkAdapter, 0);
     currentNetworkAdapter = move(networkAdapter);
-    setParam(currentNetworkAdapter + ".InputSize", to_string(getLayerWidth(inputs[0].dims, currentNetworkAdapter)));
+    setParam(currentNetworkAdapter + ".InputSize", to_string(getLayerWidth(networkDefinitions[networkIndex].input.dims, currentNetworkAdapter)));
 }
 
 #ifndef DYNAMIC_LINKING
@@ -602,7 +672,7 @@ void Feofan::setGetLayerWidthCallback(function<size_t(nvinfer1::Dims dims, strin
 }
 #endif // DYNAMIC_LINKING
 
-void Feofan::setNetworkReadyCallback(function<void()> callback) {
+void Feofan::setNetworkReadyCallback(function<void(int, bool)> callback) {
     readyCallback = move(callback);
 }
 

@@ -21,23 +21,3 @@ bool utils::cudaAllocMapped(void** cpuPtr, void** gpuPtr, size_t size) {
     return true;
 
 }
-
-void CudaLogger::log(Severity severity, const char* msg) {
-    switch (severity) {
-    case nvinfer1::ILogger::Severity::kINFO:
-        if (utils::Log) utils::Log(string("CUDA: ") + msg, 0);
-        break;
-    case nvinfer1::ILogger::Severity::kWARNING:
-        if (utils::Log) utils::Log(string("CUDA: ") + msg, 1);
-        break;
-    case nvinfer1::ILogger::Severity::kERROR:
-        if (utils::Log) utils::Log(string("CUDA: ") + msg, 2);
-        break;
-    case nvinfer1::ILogger::Severity::kINTERNAL_ERROR:
-        if (utils::Log) utils::Log(string("CUDA: ") + msg, 2);
-        break;
-    case Severity::kVERBOSE:
-        if (utils::Log) utils::Log(string("CUDA: ") + msg, 0);
-        break;
-    }
-}

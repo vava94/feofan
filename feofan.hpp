@@ -41,34 +41,8 @@ using namespace nvinfer1;
 
 class Feofan {
 
-private:
-#ifdef _WIN32
-#ifdef _MSC_VER
-#define WINCALL __cdecl
-#endif // _MVS_VER
-#elif __linux__
-    typedef void* HINSTANCE;
-#define WINCALL
-#endif
+public:
 
-
-
-    enum PrecisionType
-    {
-        FP32_PT = 0,		    /// 32-bit floating-point precision
-        FP16_PT,		        /// 16-bit floating-point half precision
-        INT8_PT,		        /// 8-bit integer precision
-        FASTEST_PT,             /// Позволяет оптимизатору самому выбрать точность
-        PRECISIONS_COUNT	/// Number of precision types defined
-    };
-    enum DeviceType
-    {
-        DEVICE_GPU = 0,			/**< GPU (if multiple GPUs are present, a specific GPU can be selected with cudaSetDevice() */
-        DEVICE_DLA,				/**< Deep Learning Accelerator (DLA) Core 0 (only on Jetson Xavier) */
-        DEVICE_DLA_0 = DEVICE_DLA,	/**< Deep Learning Accelerator (DLA) Core 0 (only on Jetson Xavier) */
-        DEVICE_DLA_1,				/**< Deep Learning Accelerator (DLA) Core 1 (only on Jetson Xavier) */
-        NUM_DEVICES				/**< Number of device types defined */
-    };
     struct layerInfo
     {
         std::string name;
@@ -85,10 +59,56 @@ private:
         std::string name;
         DeviceType deviceType;
         IExecutionContext *executionContext{nullptr};
+        ICudaEngine *engine;
+        uint8_t precisionType;
+        size_t memory;
+        size_t nbLayers;
+        layerInfo input;
+        std::vector<layerInfo> outputs;
         void **bindings;
     };
 
-    enum class ModelFormat    {
+private:
+
+    #ifdef _WIN32
+        #ifdef _MSC_VER
+            #define WINCALL __cdecl
+        #else
+            typedef void* HINSTANCE;
+            #define WINCALL
+        #endif // _MVS_VER
+    #elif __linux__
+        typedef void* HINSTANCE;
+        #define WINCALL
+    #endif
+
+    enum PrecisionType
+    {
+        FP32_PT = 0,		    /// 32-bit floating-point precision
+        FP16_PT,		        /// 16-bit floating-point half precision
+        INT8_PT,		        /// 8-bit integer precision
+        FASTEST_PT,             /// Позволяет оптимизатору самому выбрать точность
+        PRECISIONS_COUNT	    /// Number of precision types defined
+    };
+
+    const std::string precisionsStr[4] =
+    {
+            "FP32_PT",
+            "FP16_PT",
+            "INT8_PT",
+            "FASTEST_PT"
+    };
+
+    enum DeviceType
+    {
+        DEVICE_GPU = 0,			    /**< GPU (if multiple GPUs are present, a specific GPU can be selected with cudaSetDevice() */
+        DEVICE_DLA,				    /**< Deep Learning Accelerator (DLA) Core 0 (only on Jetson Xavier) */
+        DEVICE_DLA_0 = DEVICE_DLA,	/**< Deep Learning Accelerator (DLA) Core 0 (only on Jetson Xavier) */
+        DEVICE_DLA_1,				/**< Deep Learning Accelerator (DLA) Core 1 (only on Jetson Xavier) */
+        NUM_DEVICES				    /**< Number of device types defined */
+    };
+
+    enum class ModelFormat {
         CAFFE,
         ONNX,
         UFF
@@ -116,19 +136,17 @@ private:
 
     bool loaded;
     cudaStream_t cudaStream;
-    std::function<void()> readyCallback;
+    std::function<void(int, bool)> readyCallback;
     
     std::function<void(std::string)> neuralInfo;
 
-    IExecutionContext *executionContext{nullptr};
     int dlaCoresCount, networksCount;
     std::map<int, NeuralImage*> neuralImages;
     std::string infoString, currentNetworkAdapter;
-    std::vector<layerInfo> inputs, outputs;
+
     std::vector<NetworkDefinition> networkDefinitions;
-    std::vector<PrecisionType> availablePrecisions;
+    std::vector<std::string> availablePrecisions;
     std::vector<std::string> availableAdapters;
-    void **bindings;
     HINSTANCE neuralAdapter;
 
 #ifdef  DYNAMIC_LINKING
@@ -143,12 +161,10 @@ private:
     function<void(std::string paramName, std::string value)> setParam;
 #endif //  DYNAMIC_LINKING
 
-
-
     static inline Dims validateDims( const Dims& dims );
 
-public:
 
+public:
     /**
     * @param logCallback            Функция обратного вызова для лога
     * @param neuralStatusCallback   Функция обратного вызова для информации о информации фрэймворка по работе нейронной сети
@@ -170,12 +186,15 @@ public:
     */
     void allocImage(int index, int width, int height, int channels);
     void applyDetections(int index);
-    [[nodiscard]] int bindingsCount() const;
+    void closeNetwork(int pos);
     [[nodiscard]] std::vector<std::string> getAdapters() const;
-    [[nodiscard]] std::vector<layerInfo> getInputsInfo() const;
+    /**
+     * Get available precisions for current device
+     * @return vector of precisions in string format
+     */
+    [[nodiscard]] const std::vector<std::string>& getAvailablePrecisions();
     [[nodiscard]] uint8_t *getImage() const;
-    [[nodiscard]] std::vector<layerInfo> getOutputsInfo() const;
-    [[nodiscard]] int layersCount() const;
+    [[nodiscard]] NetworkDefinition getNetworkDefinition(int pos);
     /**
     * The function loads a true type font file for name captions in detection mode.
     * 
@@ -190,10 +209,10 @@ public:
     * 
     */
     void loadNetwork(std::string networkPath);
-    [[nodiscard]] std::string networkName() const;
+    [[nodiscard]] std::string networkName(int networkIndex) const;
     void newData(int index, uint8_t *data);
-    bool neuralInit(std::string networkPath, const std::string& caffeProtoTxtPath = "");
-    //[[nodiscard]] std::string precisionTypeName() const;
+    void neuralInit(const std::string &networkPath, const std::string& caffeProtoTxtPath = "");
+
     std::string optimizeNetwork(std::string networkPath, DeviceType deviceType, PrecisionType precisionType);
     /**
     * The function processes all data loaded into the framework.
@@ -202,9 +221,9 @@ public:
     /**
     * The function processes data for a specific index.
     */
-    void processData(int index);
-    void setCurrentNetworkAdapter(std::string networkAdapter);
-    void setNetworkReadyCallback(std::function<void()> callback);
+    void processData(int networkIndex);
+    void setCurrentNetworkAdapter(int networkIndex, std::string networkAdapter);
+    void setNetworkReadyCallback(std::function<void(int, bool)> callback);
 
 #ifndef DYNAMIC_LINKING
     /**

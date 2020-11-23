@@ -27,7 +27,25 @@ namespace utils {
  * Logger for cuda functions.
  */
 static class CudaLogger : public nvinfer1::ILogger {
-    void log(Severity severity, const char* msg) override;
+    void log(Severity severity, const char* msg) final {
+                switch (severity) {
+            case nvinfer1::ILogger::Severity::kINFO:
+                if (utils::Log) utils::Log(std::string("CUDA: ") + msg, 0);
+                break;
+            case nvinfer1::ILogger::Severity::kWARNING:
+                if (utils::Log) utils::Log(std::string("CUDA: ") + msg, 1);
+                break;
+            case nvinfer1::ILogger::Severity::kERROR:
+                if (utils::Log) utils::Log(std::string("CUDA: ") + msg, 2);
+                break;
+            case nvinfer1::ILogger::Severity::kINTERNAL_ERROR:
+                if (utils::Log) utils::Log(std::string("CUDA: ") + msg, 2);
+                break;
+            case Severity::kVERBOSE:
+                if (utils::Log) utils::Log(std::string("CUDA: ") + msg, 0);
+                break;
+        }
+    }
 } cudaLogger;
 
 
