@@ -430,6 +430,7 @@ void Feofan::neuralInit(const string& networkPath, const string& caffeProtoTxtPa
         utils::Log(NN_TAG "***************************************", 0);
     }
 
+    auto mI  = mCudaEngine->getMaxBatchSize();
     /// Запись информации в networkDefinition
     mNetworkDefinition.name = mCudaEngine->getName();
     mNetworkDefinition.enginePath = mEnginePath;
